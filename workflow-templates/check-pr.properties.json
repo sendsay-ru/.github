@@ -1,0 +1,10 @@
+{
+  "name": "Linting JS",
+  "description": "Linting and testing JavaScript on PRs",
+  "categories": [
+      "JS"
+  ],
+  "filePatterns": [
+      "package.json"
+  ]
+}
