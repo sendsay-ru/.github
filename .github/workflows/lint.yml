@@ -30,4 +30,4 @@ jobs:
         with:
           node-version: 18
       - name: ${{ matrix.script }}
-        run: npm run ${{ matrix.script }}
+        run: ${{ matrix.script }}
