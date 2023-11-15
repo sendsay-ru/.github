@@ -4,6 +4,7 @@
   "categories": [
       "JS"
   ],
+  "iconName": "check-pr",
   "filePatterns": [
       "package.json"
   ]
