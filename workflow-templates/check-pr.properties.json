@@ -1,11 +1,7 @@
 {
   "name": "Linting JS",
   "description": "Linting and testing JavaScript on PRs",
-  "categories": [
-      "JavaScript"
-  ],
+  "categories": ["JavaScript"],
   "iconName": "check-pr",
-  "filePatterns": [
-      "package.json"
-  ]
+  "filePatterns": ["package.json"]
 }
