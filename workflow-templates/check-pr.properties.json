@@ -2,7 +2,7 @@
   "name": "Linting JS",
   "description": "Linting and testing JavaScript on PRs",
   "categories": [
-      "JS"
+      "JavaScript"
   ],
   "iconName": "check-pr",
   "filePatterns": [
