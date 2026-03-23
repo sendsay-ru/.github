@@ -210,6 +210,14 @@ jobs:
     name: Deploy ${{ matrix.site }}
     needs: [prepare, comment_placeholder]
     runs-on: ubuntu-22.04
+    env:
+      API_URL: ${{ secrets.API_URL }}
+      TEST_API_URL: ${{ secrets.TEST_API_URL }}
+      GOOGLE_TAG_MANAGER_ID: ${{ secrets.GOOGLE_TAG_MANAGER_ID }}
+      YANDEX_METRIKA_COUNTER_ID: ${{ secrets.YANDEX_METRIKA_COUNTER_ID }}
+      APP_SENTRY_DSN: ${{ secrets.APP_SENTRY_DSN }}
+      VITE_BLOCK_EDITOR_PLUGIN_ID: ${{ secrets.VITE_BLOCK_EDITOR_PLUGIN_ID }}
+      VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY: ${{ secrets.VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY }}
 
     strategy:
       fail-fast: false
@@ -225,36 +233,6 @@ jobs:
           BUILD_ENV_JSON: ${{ needs.prepare.outputs.build_env_json }}
         run: |
           jq -r 'to_entries[] | "\(.key)<<__BUILD_ENV__\n\(.value)\n__BUILD_ENV__"' <<<"$BUILD_ENV_JSON" >> "$GITHUB_ENV"
-
-      - name: Export secret build environment
-        env:
-          API_URL: ${{ secrets.API_URL }}
-          TEST_API_URL: ${{ secrets.TEST_API_URL }}
-          GOOGLE_TAG_MANAGER_ID: ${{ secrets.GOOGLE_TAG_MANAGER_ID }}
-          YANDEX_METRIKA_COUNTER_ID: ${{ secrets.YANDEX_METRIKA_COUNTER_ID }}
-          APP_SENTRY_DSN: ${{ secrets.APP_SENTRY_DSN }}
-          VITE_BLOCK_EDITOR_PLUGIN_ID: ${{ secrets.VITE_BLOCK_EDITOR_PLUGIN_ID }}
-          VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY: ${{ secrets.VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY }}
-        run: |
-          for name in \
-            API_URL \
-            TEST_API_URL \
-            GOOGLE_TAG_MANAGER_ID \
-            YANDEX_METRIKA_COUNTER_ID \
-            APP_SENTRY_DSN \
-            VITE_BLOCK_EDITOR_PLUGIN_ID \
-            VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY
-          do
-            value="${!name}"
-
-            if [[ -n "$value" ]]; then
-              {
-                echo "$name<<__SECRET_BUILD_ENV__"
-                echo "$value"
-                echo "__SECRET_BUILD_ENV__"
-              } >> "$GITHUB_ENV"
-            fi
-          done
 
       - name: Setup Node.js
         if: ${{ !env.ACT }}
