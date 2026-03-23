@@ -1,0 +1,46 @@
+name: Preview Ref Deploy
+description: Normalize the current ref name and upload build files to the preview server
+
+inputs:
+  ssh-private-key:
+    required: true
+    description: SSH private key for preview server access
+  preview-server-host:
+    required: true
+    description: Preview server hostname or IP
+  preview-root-dir:
+    required: false
+    description: Root directory for preview files
+    default: /var/www
+  site:
+    required: true
+    description: Preview site name
+  output:
+    required: true
+    description: Local build output directory
+
+outputs:
+  path-name:
+    description: Normalized ref name used as preview path
+    value: ${{ steps.path_name.outputs.path-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Determine path name
+      id: path_name
+      shell: bash
+      run: |
+        path_name="${GITHUB_REF_NAME//\//-}"
+        path_name="${path_name//./-}"
+        echo "path-name=$path_name" >> "$GITHUB_OUTPUT"
+
+    - name: Deploy preview files
+      uses: sendsay-ru/.github/.github/actions/preview-rsync@stable
+      with:
+        ssh-private-key: ${{ inputs.ssh-private-key }}
+        preview-server-host: ${{ inputs.preview-server-host }}
+        preview-root-dir: ${{ inputs.preview-root-dir }}
+        site: ${{ inputs.site }}
+        path-name: ${{ steps.path_name.outputs.path-name }}
+        output: ${{ inputs.output }}
