@@ -19,10 +19,6 @@ on:
         required: false
         type: string
         default: 87.228.99.131
-      build_env_json:
-        required: false
-        type: string
-        default: '{}'
       comment_identifier:
         required: false
         type: string
@@ -48,6 +44,7 @@ jobs:
       pr_number: ${{ steps.pr_number.outputs.result }}
       matrix: ${{ steps.preview_config.outputs.matrix }}
       site_names: ${{ steps.preview_config.outputs.site_names }}
+      build_env_json: ${{ steps.preview_config.outputs.build_env_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,19 +55,22 @@ jobs:
           config_path='${{ inputs.config_path }}'
 
           jq -e '
-            .include | arrays and
-            all(
-              .[];
-              has("site") and
-              has("node_version") and
-              has("install_cmd") and
-              has("build_cmd") and
-              has("output")
+            (.build_env // {} | type == "object") and
+            (.include | arrays and
+              all(
+                .[];
+                has("site") and
+                has("node_version") and
+                has("install_cmd") and
+                has("build_cmd") and
+                has("output")
+              )
             )
           ' "$config_path" > /dev/null
 
           echo "matrix=$(jq -c '.' "$config_path")" >> "$GITHUB_OUTPUT"
           echo "site_names=$(jq -c '[.include[].site]' "$config_path")" >> "$GITHUB_OUTPUT"
+          echo "build_env_json=$(jq -c '.build_env // {}' "$config_path")" >> "$GITHUB_OUTPUT"
 
       - name: Determine path name
         id: preview_site
@@ -220,11 +220,41 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Export build environment
-        if: ${{ inputs.build_env_json != '' && inputs.build_env_json != '{}' }}
+        if: ${{ needs.prepare.outputs.build_env_json != '{}' }}
         env:
-          BUILD_ENV_JSON: ${{ inputs.build_env_json }}
+          BUILD_ENV_JSON: ${{ needs.prepare.outputs.build_env_json }}
         run: |
           jq -r 'to_entries[] | "\(.key)<<__BUILD_ENV__\n\(.value)\n__BUILD_ENV__"' <<<"$BUILD_ENV_JSON" >> "$GITHUB_ENV"
+
+      - name: Export secret build environment
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          TEST_API_URL: ${{ secrets.TEST_API_URL }}
+          GOOGLE_TAG_MANAGER_ID: ${{ secrets.GOOGLE_TAG_MANAGER_ID }}
+          YANDEX_METRIKA_COUNTER_ID: ${{ secrets.YANDEX_METRIKA_COUNTER_ID }}
+          APP_SENTRY_DSN: ${{ secrets.APP_SENTRY_DSN }}
+          VITE_BLOCK_EDITOR_PLUGIN_ID: ${{ secrets.VITE_BLOCK_EDITOR_PLUGIN_ID }}
+          VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY: ${{ secrets.VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY }}
+        run: |
+          for name in \
+            API_URL \
+            TEST_API_URL \
+            GOOGLE_TAG_MANAGER_ID \
+            YANDEX_METRIKA_COUNTER_ID \
+            APP_SENTRY_DSN \
+            VITE_BLOCK_EDITOR_PLUGIN_ID \
+            VITE_BLOCK_EDITOR_EMERGENCY_CONFIG_KEY
+          do
+            value="${!name}"
+
+            if [[ -n "$value" ]]; then
+              {
+                echo "$name<<__SECRET_BUILD_ENV__"
+                echo "$value"
+                echo "__SECRET_BUILD_ENV__"
+              } >> "$GITHUB_ENV"
+            fi
+          done
 
       - name: Setup Node.js
         if: ${{ !env.ACT }}
