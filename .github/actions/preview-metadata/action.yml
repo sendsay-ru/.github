@@ -1,0 +1,58 @@
+name: Preview Metadata
+description: Save preview metadata JSON for a single preview site
+
+inputs:
+  site:
+    required: true
+    description: Preview site name
+  path-name:
+    required: true
+    description: Preview path name
+  preview-base-domain:
+    required: false
+    description: Preview base domain
+    default: sendsay.dev
+  build-duration-seconds:
+    required: false
+    description: Build duration in seconds
+    default: ''
+  output-dir:
+    required: false
+    description: Directory where preview metadata JSON should be written
+    default: ${{ runner.temp }}
+
+outputs:
+  file:
+    description: Path to the generated preview metadata JSON file
+    value: ${{ steps.metadata.outputs.file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Write preview metadata
+      id: metadata
+      shell: bash
+      env:
+        SITE: ${{ inputs.site }}
+        PATH_NAME: ${{ inputs.path-name }}
+        PREVIEW_BASE_DOMAIN: ${{ inputs.preview-base-domain }}
+        BUILD_DURATION_SECONDS: ${{ inputs.build-duration-seconds }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        BUILD_DURATION_VALUE=null
+
+        if [[ -n "$BUILD_DURATION_SECONDS" ]]; then
+          BUILD_DURATION_VALUE=$BUILD_DURATION_SECONDS
+        fi
+
+        output_file="$OUTPUT_DIR/preview-${SITE}.json"
+
+        cat > "$output_file" <<EOF
+        {
+          "site": "${SITE}",
+          "preview_url": "https://${PATH_NAME}.${SITE}.${PREVIEW_BASE_DOMAIN}",
+          "build_duration_seconds": ${BUILD_DURATION_VALUE}
+        }
+        EOF
+
+        echo "file=$output_file" >> "$GITHUB_OUTPUT"
