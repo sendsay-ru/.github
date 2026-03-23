@@ -1,0 +1,71 @@
+name: Extract Preview URL
+description: Get preview deploy url
+
+inputs:
+  deploy-name:
+    required: true
+    description: deploy name
+
+outputs:
+  link:
+    description: Preview url
+    value: ${{ steps.url.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - name: URL
+      id: url
+      uses: actions/github-script@v7
+      with:
+        result-encoding: string
+        script: |
+          const ref = context.ref || '';
+          const refName = ref
+            .replace(/^refs\/heads\//, '')
+            .replace(/^refs\/tags\//, '');
+          const deployName = '${{ inputs.deploy-name }}';
+
+          const deployNameAliases = {
+            'sendsay-dev': 'app',
+            'sendsay-transport': 'transport',
+            'sendsay-stable': 'app',
+          };
+
+          const site = deployNameAliases[deployName] ?? deployName;
+
+          let pathName = '';
+
+          if (context.eventName === 'pull_request') {
+            pathName = `pr-${context.payload.pull_request.number}`;
+          } else if (ref.startsWith('refs/tags/')) {
+            pathName = refName.replace(/[/.]/g, '-');
+          } else if (refName === 'stable') {
+            pathName = 'stable';
+          } else if (refName) {
+            pathName = refName.replace(/[/.]/g, '-');
+          }
+
+          if (!pathName) {
+            pathName = 'stable';
+          }
+
+          const url = `https://${pathName}.${site}.sendsay.dev`;
+          console.log('url:', url);
+
+          return url;
+
+    - name: Wait for deployed commit marker
+      shell: bash
+      run: |
+        marker_url="${{ steps.url.outputs.result }}/__preview_commit__/$GITHUB_SHA"
+        deadline=$((SECONDS + 600))
+
+        until curl --fail --silent --show-error --location "$marker_url" --output /dev/null; do
+          if (( SECONDS >= deadline )); then
+            echo "Preview commit marker is not available after 10 minutes: $marker_url" >&2
+            exit 1
+          fi
+
+          sleep 5
+        done
