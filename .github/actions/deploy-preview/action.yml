@@ -1,0 +1,106 @@
+name: Deploy Preview
+description: Checkout, install, build, deploy preview files, and write preview metadata
+
+inputs:
+  node-version:
+    required: true
+    description: Node.js version used for the build
+  install-cmd:
+    required: true
+    description: Command used to install dependencies
+  build-cmd:
+    required: true
+    description: Command used to build the site
+  site:
+    required: true
+    description: Preview site name
+  path-name:
+    required: true
+    description: Preview path name
+  output:
+    required: true
+    description: Build output directory
+  preview-base-domain:
+    required: false
+    description: Preview base domain
+    default: sendsay.dev
+  preview-root-dir:
+    required: false
+    description: Preview root directory on the server
+    default: /var/www
+  preview-server-host:
+    required: true
+    description: Preview server hostname or IP
+  preview-ssh-private-key:
+    required: true
+    description: SSH private key for preview server access
+  pr-number:
+    required: false
+    description: Pull request number used to decide whether metadata should be created
+    default: ''
+
+outputs:
+  build-duration-seconds:
+    description: Build duration in seconds
+    value: ${{ steps.build_duration.outputs.seconds }}
+  metadata-file:
+    description: Path to generated preview metadata JSON file
+    value: ${{ steps.preview_metadata.outputs.file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      if: ${{ !env.ACT }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: ${{ inputs.install-cmd }}
+
+    - name: Start build timer
+      id: build_timer
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+    - name: Build ${{ inputs.site }}
+      shell: bash
+      run: ${{ inputs.build-cmd }}
+
+    - name: Capture build duration
+      if: ${{ always() }}
+      id: build_duration
+      shell: bash
+      env:
+        STARTED_AT: ${{ steps.build_timer.outputs.started_at }}
+      run: |
+        if [[ -n "$STARTED_AT" ]]; then
+          echo "seconds=$(( $(date +%s) - STARTED_AT ))" >> "$GITHUB_OUTPUT"
+        else
+          echo "seconds=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Deploy ${{ inputs.site }}
+      uses: sendsay-ru/.github/.github/actions/preview-rsync@stable
+      with:
+        ssh-private-key: ${{ inputs.preview-ssh-private-key }}
+        preview-server-host: ${{ inputs.preview-server-host }}
+        preview-root-dir: ${{ inputs.preview-root-dir }}
+        site: ${{ inputs.site }}
+        path-name: ${{ inputs.path-name }}
+        output: ${{ inputs.output }}
+
+    - name: Save preview metadata
+      if: ${{ inputs.pr-number != '' }}
+      id: preview_metadata
+      uses: sendsay-ru/.github/.github/actions/preview-metadata@stable
+      with:
+        site: ${{ inputs.site }}
+        path-name: ${{ inputs.path-name }}
+        preview-base-domain: ${{ inputs.preview-base-domain }}
+        build-duration-seconds: ${{ steps.build_duration.outputs.seconds }}
