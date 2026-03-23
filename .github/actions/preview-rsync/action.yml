@@ -1,0 +1,49 @@
+name: Preview Rsync Deploy
+description: Upload build files to the preview server and mark the deployed commit
+
+inputs:
+  ssh-private-key:
+    required: true
+    description: SSH private key for preview server access
+  preview-server-host:
+    required: true
+    description: Preview server hostname or IP
+  preview-root-dir:
+    required: false
+    description: Root directory for preview files
+    default: /var/www
+  site:
+    required: true
+    description: Preview site name
+  path-name:
+    required: true
+    description: Preview path name
+  output:
+    required: true
+    description: Local build output directory
+
+runs:
+  using: composite
+  steps:
+    - name: Setup SSH
+      shell: bash
+      run: |
+        mkdir -p ~/.ssh
+        printf '%s\n' "${{ inputs.ssh-private-key }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H "${{ inputs.preview-server-host }}" >> ~/.ssh/known_hosts
+
+    - name: Deploy via rsync
+      shell: bash
+      run: |
+        rsync -avz --delete \
+          "${{ inputs.output }}/" \
+          root@"${{ inputs.preview-server-host }}":"${{ inputs.preview-root-dir }}/${{ inputs.site }}/${{ inputs.path-name }}/"
+
+    - name: Mark deployed commit
+      shell: bash
+      run: |
+        remote_site_dir="${{ inputs.preview-root-dir }}/${{ inputs.site }}/${{ inputs.path-name }}"
+
+        ssh root@"${{ inputs.preview-server-host }}" \
+          "rm -rf \"$remote_site_dir/__preview_commit__\" && mkdir -p \"$remote_site_dir/__preview_commit__\" && touch \"$remote_site_dir/__preview_commit__/$GITHUB_SHA\""

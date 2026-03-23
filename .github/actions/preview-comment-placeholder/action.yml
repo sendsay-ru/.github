@@ -1,0 +1,60 @@
+name: Preview Comment Placeholder
+description: Post or update the pending preview comment for a pull request
+
+inputs:
+  github-token:
+    required: true
+    description: GitHub token used to publish the comment
+  pr-number:
+    required: true
+    description: Pull request number
+  path-name:
+    required: true
+    description: Preview path name
+  site-names-json:
+    required: true
+    description: JSON array of preview site names
+  comment-identifier:
+    required: false
+    description: Stable preview comment identifier
+    default: preview-deploy
+
+runs:
+  using: composite
+  steps:
+    - name: Build placeholder preview comment body
+      id: body
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        result-encoding: string
+        script: |
+          const pathName = '${{ inputs.path-name }}';
+          const sites = JSON.parse(String.raw`${{ inputs.site-names-json }}`);
+          const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+          const rows = sites
+            .map(site => `| ⏳ Pending | ${site} | — | — | — |`)
+            .join('\n');
+
+          return [
+            '## Preview Deploy',
+            '',
+            `Path: \`${pathName}\``,
+            `Commit: \`${context.sha.slice(0, 7)}\``,
+            `Run: [Open workflow run](${runUrl})`,
+            '',
+            '| Status | Site | Preview | Logs | Build time |',
+            '| --- | --- | --- | --- | --- |',
+            rows,
+            '',
+            '_Preview is rebuilding for the latest commit. Statuses will update automatically._',
+          ].join('\n');
+
+    - name: Post placeholder preview comment
+      uses: sendsay-ru/rewritable-pr-comment@v1.0.0
+      with:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ISSUE_ID: ${{ inputs.pr-number }}
+        COMMENT_IDENTIFIER: ${{ inputs.comment-identifier }}
+        message: ${{ steps.body.outputs.result }}
