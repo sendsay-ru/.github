@@ -1,0 +1,442 @@
+name: Preview
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        required: false
+        type: string
+        default: .github/preview-sites.json
+      preview_base_domain:
+        required: false
+        type: string
+        default: sendsay.dev
+      preview_root_dir:
+        required: false
+        type: string
+        default: /var/www
+      preview_server_host:
+        required: false
+        type: string
+        default: 87.228.99.131
+      build_env_json:
+        required: false
+        type: string
+        default: '{}'
+      comment_identifier:
+        required: false
+        type: string
+        default: preview-deploy
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  PREVIEW_BASE_DOMAIN: ${{ inputs.preview_base_domain }}
+  PREVIEW_ROOT_DIR: ${{ inputs.preview_root_dir }}
+  PREVIEW_SERVER_HOST: ${{ inputs.preview_server_host }}
+
+jobs:
+  prepare:
+    name: Prepare preview site
+    runs-on: ubuntu-22.04
+    outputs:
+      path_name: ${{ steps.preview_site.outputs.path_name }}
+      pr_number: ${{ steps.pr_number.outputs.result }}
+      matrix: ${{ steps.preview_config.outputs.matrix }}
+      site_names: ${{ steps.preview_config.outputs.site_names }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load preview config
+        id: preview_config
+        run: |
+          config_path='${{ inputs.config_path }}'
+
+          jq -e '
+            .include | arrays and
+            all(
+              .[];
+              has("site") and
+              has("node_version") and
+              has("install_cmd") and
+              has("build_cmd") and
+              has("output")
+            )
+          ' "$config_path" > /dev/null
+
+          echo "matrix=$(jq -c '.' "$config_path")" >> "$GITHUB_OUTPUT"
+          echo "site_names=$(jq -c '[.include[].site]' "$config_path")" >> "$GITHUB_OUTPUT"
+
+      - name: Determine path name
+        id: preview_site
+        run: |
+          path_name=''
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            path_name="pr-${{ github.event.pull_request.number }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            safe_tag="${GITHUB_REF_NAME//\//-}"
+            safe_tag="${safe_tag//./-}"
+            path_name="$safe_tag"
+          elif [[ "${{ github.ref_name }}" == "stable" ]]; then
+            path_name='stable'
+          else
+            safe_ref="${GITHUB_REF_NAME//\//-}"
+            safe_ref="${safe_ref//./-}"
+            path_name="$safe_ref"
+          fi
+
+          echo "path_name=${path_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve pull request number
+        id: pr_number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const directPrNumber = context.payload.pull_request?.number;
+
+            if (directPrNumber) {
+              return String(directPrNumber);
+            }
+
+            if (context.eventName !== 'push' || !context.ref.startsWith('refs/heads/')) {
+              return '';
+            }
+
+            const branchName = context.ref.replace(/^refs\/heads\//, '');
+
+            const associatedPullRequests = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                per_page: 100,
+              }
+            );
+
+            const associatedOpenPullRequest = associatedPullRequests.find(
+              pullRequest => pullRequest.state === 'open'
+            );
+
+            if (associatedOpenPullRequest) {
+              return String(associatedOpenPullRequest.number);
+            }
+
+            const branchPullRequests = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${branchName}`,
+              per_page: 100,
+            });
+
+            const branchPullRequest = branchPullRequests.find(
+              pullRequest => pullRequest.head?.ref === branchName
+            );
+
+            return branchPullRequest ? String(branchPullRequest.number) : '';
+
+  comment_placeholder:
+    name: Reset preview comment
+    needs: prepare
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Build placeholder preview comment body
+        if: ${{ needs.prepare.outputs.pr_number }}
+        id: placeholder_comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const pathName = '${{ needs.prepare.outputs.path_name }}';
+            const defaultSites = JSON.parse(String.raw`${{ needs.prepare.outputs.site_names }}`);
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              filter: 'latest',
+              per_page: 100,
+            });
+
+            const detectedSites = jobs
+              .filter(job => job.name.startsWith('Deploy '))
+              .map(job => job.name.replace(/^Deploy /, ''));
+
+            const sites = (detectedSites.length > 0 ? detectedSites : defaultSites)
+              .filter((site, index, list) => list.indexOf(site) === index);
+
+            const rows = sites
+              .map(site => `| ⏳ Pending | ${site} | — | — | — |`)
+              .join('\n');
+
+            return [
+              '## Preview Deploy',
+              '',
+              `Path: \`${pathName}\``,
+              `Commit: \`${context.sha.slice(0, 7)}\``,
+              `Run: [Open workflow run](${runUrl})`,
+              '',
+              '| Status | Site | Preview | Logs | Build time |',
+              '| --- | --- | --- | --- | --- |',
+              rows,
+              '',
+              '_Preview is rebuilding for the latest commit. Statuses will update automatically._',
+            ].join('\n');
+
+      - name: Post placeholder preview comment
+        if: ${{ needs.prepare.outputs.pr_number && steps.placeholder_comment.outcome == 'success' }}
+        continue-on-error: true
+        uses: sendsay-ru/rewritable-pr-comment@v1.0.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_ID: ${{ needs.prepare.outputs.pr_number }}
+          COMMENT_IDENTIFIER: ${{ inputs.comment_identifier }}
+          message: ${{ steps.placeholder_comment.outputs.result }}
+
+  deploy:
+    name: Deploy ${{ matrix.site }}
+    needs: [prepare, comment_placeholder]
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Export build environment
+        if: ${{ inputs.build_env_json != '' && inputs.build_env_json != '{}' }}
+        env:
+          BUILD_ENV_JSON: ${{ inputs.build_env_json }}
+        run: |
+          jq -r 'to_entries[] | "\(.key)<<__BUILD_ENV__\n\(.value)\n__BUILD_ENV__"' <<<"$BUILD_ENV_JSON" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        if: ${{ !env.ACT }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node_version }}
+
+      - name: Install dependencies
+        run: ${{ matrix.install_cmd }}
+
+      - name: Start build timer
+        id: build_timer
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Build ${{ matrix.site }}
+        run: ${{ matrix.build_cmd }}
+
+      - name: Capture build duration
+        if: ${{ always() }}
+        id: build_duration
+        env:
+          STARTED_AT: ${{ steps.build_timer.outputs.started_at }}
+        run: |
+          if [[ -n "$STARTED_AT" ]]; then
+            echo "seconds=$(( $(date +%s) - STARTED_AT ))" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PREVIEW_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$PREVIEW_SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy ${{ matrix.site }} via rsync
+        run: |
+          rsync -avz --delete \
+            ${{ matrix.output }}/ \
+            root@"$PREVIEW_SERVER_HOST":"$PREVIEW_ROOT_DIR"/${{ matrix.site }}/${{ needs.prepare.outputs.path_name }}/
+
+      - name: Mark deployed commit for ${{ matrix.site }}
+        run: |
+          remote_site_dir="$PREVIEW_ROOT_DIR/${{ matrix.site }}/${{ needs.prepare.outputs.path_name }}"
+
+          ssh root@"$PREVIEW_SERVER_HOST" \
+            "rm -rf \"$remote_site_dir/__preview_commit__\" && mkdir -p \"$remote_site_dir/__preview_commit__\" && touch \"$remote_site_dir/__preview_commit__/$GITHUB_SHA\""
+
+      - name: Save preview metadata
+        if: ${{ always() && needs.prepare.outputs.pr_number }}
+        env:
+          SITE: ${{ matrix.site }}
+          PATH_NAME: ${{ needs.prepare.outputs.path_name }}
+          BUILD_DURATION_SECONDS: ${{ steps.build_duration.outputs.seconds }}
+        run: |
+          BUILD_DURATION_VALUE=null
+
+          if [[ -n "$BUILD_DURATION_SECONDS" ]]; then
+            BUILD_DURATION_VALUE=$BUILD_DURATION_SECONDS
+          fi
+
+          cat > "$RUNNER_TEMP/preview-${SITE}.json" <<EOF
+          {
+            "site": "${SITE}",
+            "preview_url": "https://${PATH_NAME}.${SITE}.${PREVIEW_BASE_DOMAIN}",
+            "build_duration_seconds": ${BUILD_DURATION_VALUE}
+          }
+          EOF
+
+      - name: Upload preview metadata
+        if: ${{ always() && needs.prepare.outputs.pr_number }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-metadata-${{ matrix.site }}
+          path: ${{ runner.temp }}/preview-${{ matrix.site }}.json
+          if-no-files-found: error
+
+  comment:
+    name: Publish preview comment
+    needs: [prepare, deploy]
+    if: ${{ always() && needs.prepare.outputs.pr_number }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download preview metadata
+        uses: actions/download-artifact@v4
+        with:
+          pattern: preview-metadata-*
+          path: preview-metadata
+          merge-multiple: true
+
+      - name: Build preview comment body
+        id: preview_comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const pathName = '${{ needs.prepare.outputs.path_name }}';
+            const previewBaseDomain = process.env.PREVIEW_BASE_DOMAIN;
+            const metadataDir = path.join(process.env.GITHUB_WORKSPACE, 'preview-metadata');
+
+            const metadataBySite = new Map();
+            if (fs.existsSync(metadataDir)) {
+              for (const fileName of fs.readdirSync(metadataDir)) {
+                if (!fileName.endsWith('.json')) continue;
+
+                const filePath = path.join(metadataDir, fileName);
+                const metadata = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                metadataBySite.set(metadata.site, metadata);
+              }
+            }
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              filter: 'latest',
+              per_page: 100,
+            });
+
+            const deployJobsBySite = new Map(
+              jobs
+                .filter(job => job.name.startsWith('Deploy '))
+                .map(job => [job.name.replace(/^Deploy /, ''), job])
+            );
+
+            const sites = Array.from(
+              new Set([...metadataBySite.keys(), ...deployJobsBySite.keys()])
+            ).sort((left, right) => left.localeCompare(right));
+
+            const getStatusPresentation = conclusion => {
+              switch (conclusion) {
+                case 'success':
+                  return { emoji: '✅', label: 'Success' };
+                case 'failure':
+                  return { emoji: '❌', label: 'Failed' };
+                case 'timed_out':
+                  return { emoji: '⏱️', label: 'Timed out' };
+                case 'cancelled':
+                  return { emoji: '⏹️', label: 'Cancelled' };
+                case 'skipped':
+                  return { emoji: '⚪', label: 'Skipped' };
+                case 'neutral':
+                  return { emoji: '⚪', label: 'Neutral' };
+                default:
+                  return { emoji: '❔', label: conclusion ?? 'Unknown' };
+              }
+            };
+
+            const formatDuration = seconds => {
+              if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) {
+                return '—';
+              }
+
+              if (seconds < 60) {
+                return `${seconds}s`;
+              }
+
+              const minutes = Math.floor(seconds / 60);
+              const remainingSeconds = seconds % 60;
+
+              if (minutes < 60) {
+                return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+              }
+
+              const hours = Math.floor(minutes / 60);
+              const remainingMinutes = minutes % 60;
+              return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+            };
+
+            const rows = sites.length === 0
+              ? '| ⚪ Skipped | — | — | — | — |'
+              : sites.map(site => {
+                  const metadata = metadataBySite.get(site) ?? {
+                    preview_url: `https://${pathName}.${site}.${previewBaseDomain}`,
+                    build_duration_seconds: null,
+                  };
+                  const job = deployJobsBySite.get(site);
+                  const conclusion = job?.conclusion ?? 'skipped';
+                  const { emoji, label } = getStatusPresentation(conclusion);
+                  const preview = conclusion === 'success' ? `[Open](${metadata.preview_url})` : '—';
+                  const logs = job?.html_url ? `[View logs](${job.html_url})` : '—';
+                  const duration = formatDuration(metadata.build_duration_seconds);
+
+                  return `| ${emoji} ${label} | ${site} | ${preview} | ${logs} | ${duration} |`;
+                }).join('\n');
+
+            return [
+              '## Preview Deploy',
+              '',
+              `Path: \`${pathName}\``,
+              `Commit: \`${context.sha.slice(0, 7)}\``,
+              '',
+              '| Status | Site | Preview | Logs | Build time |',
+              '| --- | --- | --- | --- | --- |',
+              rows,
+              '',
+              '_This comment is updated automatically on new pushes._',
+            ].join('\n');
+
+      - name: Post or update preview comment
+        if: ${{ steps.preview_comment.outcome == 'success' }}
+        continue-on-error: true
+        uses: sendsay-ru/rewritable-pr-comment@v1.0.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_ID: ${{ needs.prepare.outputs.pr_number }}
+          COMMENT_IDENTIFIER: ${{ inputs.comment_identifier }}
+          message: ${{ steps.preview_comment.outputs.result }}
