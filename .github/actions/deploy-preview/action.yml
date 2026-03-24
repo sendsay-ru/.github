@@ -5,6 +5,10 @@ inputs:
   node-version:
     required: true
     description: Node.js version used for the build
+  setup-cmd:
+    required: false
+    description: Optional command used to prepare the package manager or toolchain
+    default: ''
   install-cmd:
     required: true
     description: Command used to install dependencies
@@ -58,6 +62,11 @@ runs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
+
+    - name: Setup toolchain
+      if: ${{ inputs.setup-cmd != '' }}
+      shell: bash
+      run: ${{ inputs.setup-cmd }}
 
     - name: Install dependencies
       shell: bash
