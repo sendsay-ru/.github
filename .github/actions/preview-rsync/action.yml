@@ -33,6 +33,14 @@ runs:
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan -H "${{ inputs.preview-server-host }}" >> ~/.ssh/known_hosts
 
+    - name: Prepare remote directory
+      shell: bash
+      run: |
+        remote_site_dir="${{ inputs.preview-root-dir }}/${{ inputs.site }}/${{ inputs.path-name }}"
+
+        ssh root@"${{ inputs.preview-server-host }}" \
+          "mkdir -p \"$remote_site_dir\""
+
     - name: Deploy via rsync
       shell: bash
       run: |
