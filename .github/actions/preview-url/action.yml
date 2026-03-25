@@ -5,6 +5,10 @@ inputs:
   deploy-name:
     required: true
     description: deploy name
+  wait-mode:
+    required: false
+    description: Preview readiness check mode
+    default: exact-sha
 
 outputs:
   link:
@@ -55,15 +59,29 @@ runs:
 
           return url;
 
-    - name: Wait for deployed commit marker
+    - name: Wait for preview readiness
       shell: bash
       run: |
-        marker_url="${{ steps.url.outputs.result }}/__preview_commit__/$GITHUB_SHA"
+        wait_mode='${{ inputs.wait-mode }}'
+        target_url=''
         deadline=$((SECONDS + 600))
 
-        until curl --fail --silent --show-error --location "$marker_url" --output /dev/null; do
+        case "$wait_mode" in
+          exact-sha)
+            target_url="${{ steps.url.outputs.result }}/__preview_commit__/$GITHUB_SHA"
+            ;;
+          available)
+            target_url='${{ steps.url.outputs.result }}'
+            ;;
+          *)
+            echo "Unsupported preview wait mode: $wait_mode" >&2
+            exit 1
+            ;;
+        esac
+
+        until curl --fail --silent --show-error --location "$target_url" --output /dev/null; do
           if (( SECONDS >= deadline )); then
-            echo "Preview commit marker is not available after 10 minutes: $marker_url" >&2
+            echo "Preview is not available after 10 minutes ($wait_mode): $target_url" >&2
             exit 1
           fi
 
